@@ -33,21 +33,22 @@ class InterviewBot:
         self.google_connected = False
         self.setup_google_sheets()
 
-    def setup_google_sheets(self):
+       def setup_google_sheets(self):
         """Настройка подключения к Google Sheets"""
         try:
-            # Вариант 1: Читаем из переменной окружения (для Railway)
-            if os.environ.get('GOOGLE_CREDENTIALS'):
-                logger.info("📋 Читаю credentials из переменной окружения")
-                creds_data = json.loads(os.environ['GOOGLE_CREDENTIALS'])
-            # Вариант 2: Читаем из файла (для локальной разработки)
-            elif os.path.exists('credentials.json'):
-                logger.info("📋 Читаю credentials из файла")
-                with open('credentials.json', 'r', encoding='utf-8') as f:
+            # Сначала пробуем файл credentials.json
+            if os.path.exists('credentials.json'):
+                with open('credentials.json', 'r') as f:
                     creds_data = json.load(f)
+                    logger.info("✅ Файл credentials.json найден")
             else:
-                logger.error("❌ Не найден credentials.json и нет GOOGLE_CREDENTIALS в переменных окружения")
-                return False
+                # Если нет файла, пробуем переменную окружения
+                credentials_json = os.environ.get('GOOGLE_CREDENTIALS')
+                if not credentials_json:
+                    logger.error("❌ Не найден ни файл credentials.json, ни переменная GOOGLE_CREDENTIALS")
+                    return False
+                creds_data = json.loads(credentials_json)
+                logger.info("✅ Использую GOOGLE_CREDENTIALS из переменных окружения")
             
             scope = [
                 'https://spreadsheets.google.com/feeds',
@@ -55,8 +56,7 @@ class InterviewBot:
             ]
             
             # Создаем credentials из словаря
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_data, scope)
-            client = gspread.authorize(creds)
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_data, scope)            client = gspread.authorize(creds)
             spreadsheet = client.open_by_key(SPREADSHEET_ID)
             
             try:
