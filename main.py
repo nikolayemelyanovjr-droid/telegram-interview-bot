@@ -1,4 +1,3 @@
-
 import logging
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -10,6 +9,7 @@ import sys
 import signal
 from datetime import datetime
 import time
+import requests
 
 # Настройка логирования
 logging.basicConfig(
@@ -37,14 +37,49 @@ class InterviewBot:
         self.last_error = None
         self.setup_google_sheets()
     
-    def setup_google_sheets(self):
-        """Настройка подключения к Google Sheets с подробной диагностикой"""
+    def check_time_sync(self):
+        """Проверка и синхронизация времени"""
         try:
-            logger.info("="*50)
-            logger.info("🔧 НАЧИНАЮ ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS")
-            logger.info("="*50)
+            # Получаем текущее время сервера
+            server_time = datetime.utcnow()
+            logger.info(f"⏰ Время сервера (UTC): {server_time}")
             
-            # 1. Проверяем наличие файла
+            # Получаем время с Google для сравнения
+            try:
+                response = requests.get('https://www.google.com', timeout=5)
+                google_time = datetime.strptime(response.headers['Date'], '%a, %d %b %Y %H:%M:%S %Z')
+                logger.info(f"⏰ Время Google (UTC): {google_time}")
+                
+                # Вычисляем разницу
+                time_diff = abs((server_time - google_time).total_seconds())
+                logger.info(f"⏰ Разница времени: {time_diff:.1f} секунд")
+                
+                if time_diff > 300:  # 5 минут
+                    logger.warning(f"⚠️  Время сервера отличается от Google на {time_diff:.1f} секунд!")
+                    logger.warning("Это может вызвать ошибку 'Invalid JWT Signature'")
+                    return False
+                else:
+                    logger.info("✅ Время синхронизировано")
+                    return True
+                    
+            except Exception as e:
+                logger.warning(f"⚠️  Не удалось проверить время Google: {e}")
+                return True  # Продолжаем работу
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки времени: {e}")
+            return True
+    
+    def setup_google_sheets(self):
+        """Настройка подключения к Google Sheets"""
+        try:
+            logger.info("🔧 НАЧИНАЮ ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS")
+            
+            # Проверяем время
+            if not self.check_time_sync():
+                logger.warning("⚠️  Проблемы с синхронизацией времени")
+            
+            # Проверяем наличие файла
             if not os.path.exists('credentials.json'):
                 logger.error("❌ Файл credentials.json не найден!")
                 self.google_connected = False
@@ -52,11 +87,11 @@ class InterviewBot:
             
             logger.info("✅ Файл credentials.json найден")
             
-            # 2. Читаем файл
+            # Читаем файл
             with open('credentials.json', 'r') as f:
                 creds_data = json.load(f)
             
-            # 3. Проверяем обязательные поля
+            # Проверяем обязательные поля
             required_fields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email', 'client_id']
             missing_fields = [field for field in required_fields if field not in creds_data]
             
@@ -66,25 +101,33 @@ class InterviewBot:
             
             logger.info(f"✅ Все обязательные поля присутствуют")
             logger.info(f"📧 Client email: {creds_data['client_email']}")
-            logger.info(f"🔑 Private key ID: {creds_data['private_key_id'][:20]}...")
             
-            # 4. Проверяем формат private_key
-            private_key = creds_data['private_key']
-            if private_key.startswith('-----BEGIN PRIVATE KEY-----'):
-                logger.info("✅ Private key имеет правильный формат")
-            else:
-                logger.warning("⚠️ Private key может иметь неправильный формат")
-                # Пробуем исправить
-                if '\\n' in private_key:
-                    private_key = private_key.replace('\\n', '\n')
-                    creds_data['private_key'] = private_key
-                    logger.info("✅ Заменены \\n на переносы строк")
+            # СОЗДАЕМ ИСПРАВЛЕННЫЙ ФАЙЛ CREDENTIALS
+            # Иногда возникают проблемы с форматом private_key
+            fixed_creds_data = creds_data.copy()
             
-            # 5. Проверяем время сервера
-            server_time = datetime.utcnow()
-            logger.info(f"⏰ Время сервера (UTC): {server_time}")
+            # Убеждаемся, что private_key имеет правильный формат
+            private_key = fixed_creds_data['private_key']
             
-            # 6. Настраиваем scope
+            # Исправляем возможные проблемы с форматом
+            if '\\n' in private_key:
+                private_key = private_key.replace('\\n', '\n')
+                logger.info("✅ Исправлены \\n на переносы строк")
+            
+            if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
+                logger.warning("⚠️  Private key не начинается с правильного заголовка, исправляю...")
+                private_key = f"-----BEGIN PRIVATE KEY-----\n{private_key}\n-----END PRIVATE KEY-----"
+            
+            fixed_creds_data['private_key'] = private_key
+            
+            # Сохраняем исправленный файл
+            fixed_file = 'credentials_fixed.json'
+            with open(fixed_file, 'w') as f:
+                json.dump(fixed_creds_data, f)
+            
+            logger.info(f"✅ Создан исправленный файл: {fixed_file}")
+            
+            # Настраиваем scope
             scope = [
                 'https://spreadsheets.google.com/feeds',
                 'https://www.googleapis.com/auth/drive',
@@ -93,37 +136,86 @@ class InterviewBot:
             
             logger.info("🔄 Создаю credentials...")
             
-            # 7. Создаем credentials
+            # Пробуем несколько способов создания credentials
+            credentials = None
+            methods_tried = []
+            
+            # Метод 1: Из исправленного файла
             try:
-                creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_data, scope)
-                logger.info("✅ Credentials созданы успешно")
-            except Exception as e:
-                logger.error(f"❌ Ошибка создания credentials: {e}")
+                credentials = ServiceAccountCredentials.from_json_keyfile_name(fixed_file, scope)
+                methods_tried.append("исправленного файла")
+                logger.info("✅ Credentials созданы из исправленного файла")
+            except Exception as e1:
+                logger.warning(f"⚠️  Не удалось создать credentials из исправленного файла: {e1}")
+                
+                # Метод 2: Из оригинального файла
+                try:
+                    credentials = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+                    methods_tried.append("оригинального файла")
+                    logger.info("✅ Credentials созданы из оригинального файла")
+                except Exception as e2:
+                    logger.warning(f"⚠️  Не удалось создать credentials из оригинального файла: {e2}")
+                    
+                    # Метод 3: Из словаря
+                    try:
+                        credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds_data, scope)
+                        methods_tried.append("словаря")
+                        logger.info("✅ Credentials созданы из словаря")
+                    except Exception as e3:
+                        logger.error(f"❌ Не удалось создать credentials ни одним методом: {e3}")
+                        return False
+            
+            if not credentials:
+                logger.error("❌ Credentials не созданы")
                 return False
             
-            # 8. Авторизуемся
-            logger.info("🔐 Авторизуюсь в Google API...")
-            try:
-                client = gspread.authorize(creds)
-                logger.info("✅ Авторизация успешна")
-            except Exception as e:
-                logger.error(f"❌ Ошибка авторизации: {e}")
+            logger.info(f"✅ Credentials успешно созданы из {methods_tried[-1]}")
+            
+            # Авторизуемся с повторными попытками
+            max_auth_retries = 3
+            client = None
+            
+            for attempt in range(max_auth_retries):
+                try:
+                    logger.info(f"🔐 Попытка авторизации {attempt + 1}/{max_auth_retries}...")
+                    client = gspread.authorize(credentials)
+                    logger.info("✅ Авторизация успешна")
+                    break
+                except Exception as auth_error:
+                    logger.warning(f"⚠️  Попытка {attempt + 1} не удалась: {auth_error}")
+                    if attempt < max_auth_retries - 1:
+                        time.sleep(2)  # Ждем 2 секунды
+                    else:
+                        logger.error("❌ Все попытки авторизации не удались")
+                        return False
+            
+            if not client:
+                logger.error("❌ Не удалось авторизоваться")
                 return False
             
-            # 9. Открываем таблицу
+            # Открываем таблицу
             logger.info(f"📊 Открываю таблицу с ID: {SPREADSHEET_ID}")
+            
             try:
                 spreadsheet = client.open_by_key(SPREADSHEET_ID)
                 logger.info("✅ Таблица найдена")
             except Exception as e:
                 logger.error(f"❌ Не удалось открыть таблицу: {e}")
-                logger.error("⚠️  Проверьте:")
-                logger.error("1. Правильность Spreadsheet ID")
-                logger.error(f"2. Доступ для сервисного аккаунта: {creds_data['client_email']}")
-                logger.error("3. Что таблица существует и доступна")
-                return False
+                
+                # ПРОВЕРКА: Открываем таблицу по URL как альтернатива
+                try:
+                    logger.info("🔄 Пробую альтернативный метод открытия таблицы...")
+                    spreadsheet = client.open_by_url(f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
+                    logger.info("✅ Таблица открыта по URL")
+                except Exception as e2:
+                    logger.error(f"❌ Не удалось открыть таблицу ни одним методом: {e2}")
+                    logger.error("⚠️  ПРОВЕРЬТЕ:")
+                    logger.error(f"1. Spreadsheet ID: {SPREADSHEET_ID}")
+                    logger.error(f"2. Доступ для: {creds_data['client_email']}")
+                    logger.error("3. Что таблица существует и доступна")
+                    return False
             
-            # 10. Получаем лист
+            # Получаем лист
             try:
                 worksheet = spreadsheet.worksheet(SHEET_NAME)
                 logger.info(f"✅ Лист '{SHEET_NAME}' найден")
@@ -138,12 +230,12 @@ class InterviewBot:
             self.sheet = worksheet
             self.google_connected = True
             
-            # 11. Проверяем доступ на запись
+            # Проверяем доступ на запись
             try:
                 # Пробуем прочитать заголовки
                 headers = worksheet.row_values(1)
                 if headers:
-                    logger.info(f"✅ Заголовки найдены: {headers}")
+                    logger.info(f"✅ Заголовки найдены: {headers[:5]}...")
                 else:
                     # Создаем заголовки
                     headers = [
@@ -172,7 +264,7 @@ class InterviewBot:
         """Сохранение данных в Google Sheets"""
         if not self.google_connected:
             logger.warning("⚠️  Данные НЕ сохранены (Google Sheets отключен)")
-            # Можно добавить локальное сохранение в файл как временное решение
+            # Сохраняем локально как временное решение
             await self.save_to_local_file(data)
             return False
         
@@ -212,11 +304,11 @@ class InterviewBot:
             for attempt in range(max_retries):
                 try:
                     self.sheet.append_row(row_data)
-                    logger.info(f"✅ Данные успешно сохранены в строку {self.sheet.row_count}")
+                    logger.info(f"✅ Данные успешно сохранены!")
                     
-                    # Выводим подтверждение в логи
+                    # Выводим подтверждение
                     logger.info("="*50)
-                    logger.info("✅ ДАННЫЕ УСПЕШНО СОХРАНЕНЫ В GOOGLE SHEETS")
+                    logger.info("✅ ДАННЫЕ УСПЕШНО СОХРАНЕНЫ В GOOGLE SHEETS!")
                     logger.info("="*50)
                     
                     return True
@@ -226,6 +318,7 @@ class InterviewBot:
                     if attempt < max_retries - 1:
                         time.sleep(2)  # Ждем 2 секунды перед повторной попыткой
                     else:
+                        logger.error("❌ Все попытки сохранения не удались")
                         # Сохраняем локально как fallback
                         await self.save_to_local_file(data)
                         return False
@@ -263,6 +356,9 @@ class InterviewBot:
             
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения в локальный файл: {e}")
+    
+    # ОСТАЛЬНЫЕ МЕТОДЫ (get_fio, get_interviewer и т.д.) остаются без изменений
+    # Я вставлю их полностью, но если нужно, могу сократить для экономии места
     
     def get_main_keyboard(self):
         """Создает основную клавиатуру с кнопкой перезапуска"""
@@ -302,10 +398,6 @@ class InterviewBot:
             reply_markup=self.get_main_keyboard()
         )
         return FIO
-    
-    # ОСТАЛЬНЫЕ МЕТОДЫ ОСТАЮТСЯ БЕЗ ИЗМЕНЕНИЙ
-    # (get_fio, get_interviewer, get_canonical_obstacles и т.д.)
-    # Я вставлю их как есть из предыдущего корректного кода
     
     async def get_fio(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Шаг 1: Получение ФИО абитуриента"""
@@ -421,7 +513,7 @@ class InterviewBot:
         keyboard = [
             ['Давно в церкви', 'Недавно в церкви'],
             ['Затрудняюсь ответить'],
-            ['🔄 Перезапустить бot']
+            ['🔄 Перезапустить бот']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
@@ -704,6 +796,11 @@ def main():
     print(f"Service Account email: telegram-bot-service@telegram-bot-sheets-485811.iam.gserviceaccount.com")
     print("="*50)
     
+    # Убедитесь, что не запущены другие экземпляры бота
+    print("⚠️  Убедитесь, что не запущены другие экземпляры этого бота!")
+    print("Если бот запущен на Render/GitHub/AWS, остановите предыдущие инстансы.")
+    print("="*50)
+    
     bot = InterviewBot(BOT_TOKEN)
     application = bot.create_application()
     
@@ -713,21 +810,24 @@ def main():
     else:
         print("⚠️  GOOGLE SHEETS НЕ ПОДКЛЮЧЕН")
         print("⚠️  Данные будут сохраняться в локальный файл backup_data.json")
-        print("⚠️  ПРОВЕРЬТЕ:")
+        print("⚠️  ПРОВЕРЬТЕ СЛЕДУЮЩЕЕ:")
         print("1. Что сервисный аккаунт добавлен в Google Sheets как редактор")
-        print(f"2. Email: telegram-bot-service@telegram-bot-sheets-485811.iam.gserviceaccount.com")
-        print("3. Правильность Spreadsheet ID")
-        print("4. Доступность таблицы")
+        print(f"   Email: telegram-bot-service@telegram-bot-sheets-485811.iam.gserviceaccount.com")
+        print("2. Правильность Spreadsheet ID")
+        print("3. Таблица существует и доступна по ссылке:")
+        print(f"   https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
+        print("4. Время на сервере синхронизировано (JWT требует точного времени)")
     print("="*50)
     print("🤖 Бот запущен!")
     print("📱 Используйте команду /start для начала опроса")
     print("🔄 Кнопка 'Перезапустить бот' доступна всегда")
     print("="*50)
     
-    # Запускаем бота
+    # Запускаем бота с drop_pending_updates чтобы избежать конфликтов
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
+        drop_pending_updates=True,
+        close_loop=False  # Добавляем этот параметр
     )
 
 if __name__ == '__main__':
