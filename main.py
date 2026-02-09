@@ -586,3 +586,4 @@ if __name__ == '__main__':
   "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/telegram-bot-service%40telegram-bot-sheets-485811.iam.gserviceaccount.com",
   "universe_domain": "googleapis.com"
 }
+Add credentials.json file and update Google Sheets connection
