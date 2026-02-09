@@ -170,10 +170,6 @@ class InterviewBot:
         )
         return INTERVIEWER
     
-    # ВСТАВЬТЕ СЮДА ВСЕ ОСТАЛЬНЫЕ ФУНКЦИИ ИЗ ВАШЕГО ИСХОДНОГО КОДА
-    # (get_interviewer, get_canonical_obstacles, get_spiritual_guide, и т.д.)
-    # КОПИРУЙТЕ ИХ ИЗ ВАШЕГО СТАРОГО ФАЙЛА main.py
-    
     async def get_interviewer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Получение информации о собеседующем"""
         if update.message.text == '🔄 Перезапустить бот':
@@ -197,8 +193,273 @@ class InterviewBot:
         )
         return CANONICAL_OBSTACLES
     
-    # ПРОДОЛЖАЙТЕ ВСТАВЛЯТЬ ВСЕ ОСТАЛЬНЫЕ ФУНКЦИИ...
-    # (вставьте ВСЕ функции до метода create_application)
+    async def get_canonical_obstacles(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение информации о канонических препятствиях"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['canonical_obstacles'] = update.message.text
+        
+        keyboard = [
+            ['Да, есть'],
+            ['Нет, нет'],
+            ['Не спрашивал'],
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Шаг 4: Наличие духовника.",
+            reply_markup=reply_markup
+        )
+        return SPIRITUAL_GUIDE
+    
+    async def get_spiritual_guide(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение информации о духовнике"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['spiritual_guide'] = update.message.text
+        
+        keyboard = [
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Шаг 5: Ваши впечатления от абитуриента.\n\n"
+            "Впечатление 1: Что было на собеседовании? (Что понравилось, что не понравилось?)",
+            reply_markup=reply_markup
+        )
+        return IMPRESSIONS_1
+    
+    async def get_impressions_1(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение первого впечатления"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['impressions_1'] = update.message.text
+        
+        keyboard = [
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Впечатление 2: Что вынесли с собеседования?",
+            reply_markup=reply_markup
+        )
+        return IMPRESSIONS_2
+    
+    async def get_impressions_2(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение второго впечатления"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['impressions_2'] = update.message.text
+        
+        keyboard = [
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Впечатление 3: Священник? Семинарист?",
+            reply_markup=reply_markup
+        )
+        return IMPRESSIONS_3
+    
+    async def get_impressions_3(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение третьего впечатления"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['impressions_3'] = update.message.text
+        
+        keyboard = [
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Впечатление 4: Отношение к церкви?",
+            reply_markup=reply_markup
+        )
+        return IMPRESSIONS_4
+    
+    async def get_impressions_4(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение четвертого впечатления"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['impressions_4'] = update.message.text
+        
+        keyboard = [
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Впечатление 5: Отношение к будущему служению?",
+            reply_markup=reply_markup
+        )
+        return IMPRESSIONS_5
+    
+    async def get_impressions_5(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение пятого впечатления"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['impressions_5'] = update.message.text
+        
+        keyboard = [
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Впечатление 6: Ваши личные впечатления.",
+            reply_markup=reply_markup
+        )
+        return IMPRESSIONS_6
+    
+    async def get_impressions_6(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение шестого впечатления"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['impressions_6'] = update.message.text
+        
+        keyboard = [
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Шаг 6: Были ли какие-то проблемы/сложности на собеседовании?",
+            reply_markup=reply_markup
+        )
+        return PROBLEMS
+    
+    async def get_problems(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение информации о проблемах"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['problems'] = update.message.text
+        
+        keyboard = [
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Шаг 7: Ваши комментарии и пожелания.",
+            reply_markup=reply_markup
+        )
+        return COMMENTS
+    
+    async def get_comments(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение комментариев"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['comments'] = update.message.text
+        
+        keyboard = [
+            ['Кандидат подходит', 'Кандидат не подходит'],
+            ['Нужно дополнительное собеседование', 'Нужно посоветоваться'],
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            "Шаг 8: Ваш вердикт по кандидату.",
+            reply_markup=reply_markup
+        )
+        return VERDICT
+    
+    async def get_verdict(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Получение вердикта"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        context.user_data['verdict'] = update.message.text
+        
+        # Показываем все введенные данные для подтверждения
+        summary = self._format_summary(context.user_data)
+        
+        keyboard = [
+            ['Далее'],
+            ['🔄 Перезапустить бот']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(
+            f"Проверьте введенные данные:\n\n{summary}\n\n"
+            "Нажмите 'Далее' для сохранения или '🔄 Перезапустить бот' для начала заново.",
+            reply_markup=reply_markup
+        )
+        return CONFIRM
+    
+    def _format_summary(self, data):
+        """Форматирование данных для отображения"""
+        summary = f"""
+📋 **Сводка данных:**
+━━━━━━━━━━━━━━━━━━━━
+👤 **ФИО абитуриента:** {data.get('fio', 'Не указано')}
+👨‍🏫 **Собеседующий:** {data.get('interviewer', 'Не указано')}
+⚖️ **Канонические препятствия:** {data.get('canonical_obstacles', 'Не указано')}
+🙏 **Наличие духовника:** {data.get('spiritual_guide', 'Не указано')}
+
+📝 **Впечатления:**
+1. {data.get('impressions_1', 'Не указано')}
+2. {data.get('impressions_2', 'Не указано')}
+3. {data.get('impressions_3', 'Не указано')}
+4. {data.get('impressions_4', 'Не указано')}
+5. {data.get('impressions_5', 'Не указано')}
+6. {data.get('impressions_6', 'Не указано')}
+
+⚠️ **Проблемы/сложности:** {data.get('problems', 'Не указано')}
+💬 **Комментарии:** {data.get('comments', 'Не указано')}
+✅ **Вердикт:** {data.get('verdict', 'Не указано')}
+━━━━━━━━━━━━━━━━━━━━
+        """
+        return summary
+    
+    async def confirm_next(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Подтверждение и сохранение данных"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        # Сохраняем данные в Google Sheets
+        success = await self.save_to_sheet(context.user_data)
+        
+        if success:
+            await update.message.reply_text(
+                "✅ Данные успешно сохранены в Google Sheets!\n\n"
+                "Опрос завершен. Для начала нового опроса нажмите /start или '🔄 Перезапустить бот'.",
+                reply_markup=self.get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Произошла ошибка при сохранении данных.\n\n"
+                "Попробуйте еще раз, нажав '🔄 Перезапустить бот' или /start.",
+                reply_markup=self.get_main_keyboard()
+            )
+        
+        # Очищаем данные
+        context.user_data.clear()
+        return ConversationHandler.END
+    
+    async def cancel_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Обработчик отмены"""
+        await update.message.reply_text(
+            "Опрос отменен. Для начала нового нажмите /start.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
     
     def create_application(self):
         """Создание приложения с обработчиками"""
@@ -209,8 +470,7 @@ class InterviewBot:
         conv_handler = ConversationHandler(
             entry_points=[
                 CommandHandler('start', self.start_handler),
-                MessageHandler(restart_filter, self.restart_handler),
-                MessageHandler(filters.Regex('^Далее$'), self.confirm_next)
+                MessageHandler(restart_filter, self.restart_handler)
             ],
             states={
                 FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_fio)],
@@ -227,8 +487,8 @@ class InterviewBot:
                 COMMENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_comments)],
                 VERDICT: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_verdict)],
                 CONFIRM: [
-                    MessageHandler(restart_filter, self.restart_handler),
-                    MessageHandler(filters.Regex('^Далее$'), self.confirm_next)
+                    MessageHandler(filters.Regex('^Далее$'), self.confirm_next),
+                    MessageHandler(restart_filter, self.restart_handler)
                 ],
             },
             fallbacks=[
