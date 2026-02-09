@@ -1,15 +1,15 @@
 import logging
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
-import json
 import os
 import sys
 import signal
-from datetime import datetime
+import json
 import time
-import requests
+from datetime import datetime
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # Настройка логирования
 logging.basicConfig(
@@ -27,244 +27,136 @@ logger = logging.getLogger(__name__)
 
 # Константы для Google Sheets
 SPREADSHEET_ID = "1JvUD3CSFdgtsUVqir6zUfB5oC42NtP4YGOlZOVNRLho"
-SHEET_NAME = "Ответы"
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 class InterviewBot:
     def __init__(self, token):
         self.token = token
-        self.sheet = None
+        self.sheet_service = None
         self.google_connected = False
-        self.last_error = None
         self.setup_google_sheets()
     
-    def check_time_sync(self):
-        """Проверка и синхронизация времени"""
-        try:
-            # Получаем текущее время сервера
-            server_time = datetime.utcnow()
-            logger.info(f"⏰ Время сервера (UTC): {server_time}")
-            
-            # Получаем время с Google для сравнения
-            try:
-                response = requests.get('https://www.google.com', timeout=5)
-                google_time = datetime.strptime(response.headers['Date'], '%a, %d %b %Y %H:%M:%S %Z')
-                logger.info(f"⏰ Время Google (UTC): {google_time}")
-                
-                # Вычисляем разницу
-                time_diff = abs((server_time - google_time).total_seconds())
-                logger.info(f"⏰ Разница времени: {time_diff:.1f} секунд")
-                
-                if time_diff > 300:  # 5 минут
-                    logger.warning(f"⚠️  Время сервера отличается от Google на {time_diff:.1f} секунд!")
-                    logger.warning("Это может вызвать ошибку 'Invalid JWT Signature'")
-                    return False
-                else:
-                    logger.info("✅ Время синхронизировано")
-                    return True
-                    
-            except Exception as e:
-                logger.warning(f"⚠️  Не удалось проверить время Google: {e}")
-                return True  # Продолжаем работу
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка проверки времени: {e}")
-            return True
-    
     def setup_google_sheets(self):
-        """Настройка подключения к Google Sheets"""
+        """Настройка подключения к Google Sheets через Google API"""
         try:
-            logger.info("🔧 НАЧИНАЮ ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS")
+            logger.info("🔧 Настраиваю Google Sheets API...")
             
-            # Проверяем время
-            if not self.check_time_sync():
-                logger.warning("⚠️  Проблемы с синхронизацией времени")
-            
-            # Проверяем наличие файла
+            # Проверяем существование credentials.json
             if not os.path.exists('credentials.json'):
-                logger.error("❌ Файл credentials.json не найден!")
-                self.google_connected = False
-                return False
-            
-            logger.info("✅ Файл credentials.json найден")
-            
-            # Читаем файл
-            with open('credentials.json', 'r') as f:
-                creds_data = json.load(f)
-            
-            # Проверяем обязательные поля
-            required_fields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email', 'client_id']
-            missing_fields = [field for field in required_fields if field not in creds_data]
-            
-            if missing_fields:
-                logger.error(f"❌ Отсутствуют поля: {missing_fields}")
-                return False
-            
-            logger.info(f"✅ Все обязательные поля присутствуют")
-            logger.info(f"📧 Client email: {creds_data['client_email']}")
-            
-            # СОЗДАЕМ ИСПРАВЛЕННЫЙ ФАЙЛ CREDENTIALS
-            # Иногда возникают проблемы с форматом private_key
-            fixed_creds_data = creds_data.copy()
-            
-            # Убеждаемся, что private_key имеет правильный формат
-            private_key = fixed_creds_data['private_key']
-            
-            # Исправляем возможные проблемы с форматом
-            if '\\n' in private_key:
-                private_key = private_key.replace('\\n', '\n')
-                logger.info("✅ Исправлены \\n на переносы строк")
-            
-            if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
-                logger.warning("⚠️  Private key не начинается с правильного заголовка, исправляю...")
-                private_key = f"-----BEGIN PRIVATE KEY-----\n{private_key}\n-----END PRIVATE KEY-----"
-            
-            fixed_creds_data['private_key'] = private_key
-            
-            # Сохраняем исправленный файл
-            fixed_file = 'credentials_fixed.json'
-            with open(fixed_file, 'w') as f:
-                json.dump(fixed_creds_data, f)
-            
-            logger.info(f"✅ Создан исправленный файл: {fixed_file}")
-            
-            # Настраиваем scope
-            scope = [
-                'https://spreadsheets.google.com/feeds',
-                'https://www.googleapis.com/auth/drive',
-                'https://www.googleapis.com/auth/spreadsheets'
-            ]
-            
-            logger.info("🔄 Создаю credentials...")
-            
-            # Пробуем несколько способов создания credentials
-            credentials = None
-            methods_tried = []
-            
-            # Метод 1: Из исправленного файла
-            try:
-                credentials = ServiceAccountCredentials.from_json_keyfile_name(fixed_file, scope)
-                methods_tried.append("исправленного файла")
-                logger.info("✅ Credentials созданы из исправленного файла")
-            except Exception as e1:
-                logger.warning(f"⚠️  Не удалось создать credentials из исправленного файла: {e1}")
-                
-                # Метод 2: Из оригинального файла
-                try:
-                    credentials = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
-                    methods_tried.append("оригинального файла")
-                    logger.info("✅ Credentials созданы из оригинального файла")
-                except Exception as e2:
-                    logger.warning(f"⚠️  Не удалось создать credentials из оригинального файла: {e2}")
-                    
-                    # Метод 3: Из словаря
+                logger.warning("❌ Файл credentials.json не найден, проверяю переменные окружения...")
+                # Пробуем загрузить из переменных окружения
+                creds_json = os.environ.get('GOOGLE_CREDENTIALS')
+                if creds_json:
                     try:
-                        credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds_data, scope)
-                        methods_tried.append("словаря")
-                        logger.info("✅ Credentials созданы из словаря")
-                    except Exception as e3:
-                        logger.error(f"❌ Не удалось создать credentials ни одним методом: {e3}")
+                        creds_data = json.loads(creds_json)
+                        with open('credentials.json', 'w') as f:
+                            json.dump(creds_data, f)
+                        logger.info("✅ Credentials загружены из переменной окружения GOOGLE_CREDENTIALS")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка загрузки credentials из env: {e}")
                         return False
-            
-            if not credentials:
-                logger.error("❌ Credentials не созданы")
-                return False
-            
-            logger.info(f"✅ Credentials успешно созданы из {methods_tried[-1]}")
-            
-            # Авторизуемся с повторными попытками
-            max_auth_retries = 3
-            client = None
-            
-            for attempt in range(max_auth_retries):
-                try:
-                    logger.info(f"🔐 Попытка авторизации {attempt + 1}/{max_auth_retries}...")
-                    client = gspread.authorize(credentials)
-                    logger.info("✅ Авторизация успешна")
-                    break
-                except Exception as auth_error:
-                    logger.warning(f"⚠️  Попытка {attempt + 1} не удалась: {auth_error}")
-                    if attempt < max_auth_retries - 1:
-                        time.sleep(2)  # Ждем 2 секунды
-                    else:
-                        logger.error("❌ Все попытки авторизации не удались")
-                        return False
-            
-            if not client:
-                logger.error("❌ Не удалось авторизоваться")
-                return False
-            
-            # Открываем таблицу
-            logger.info(f"📊 Открываю таблицу с ID: {SPREADSHEET_ID}")
-            
-            try:
-                spreadsheet = client.open_by_key(SPREADSHEET_ID)
-                logger.info("✅ Таблица найдена")
-            except Exception as e:
-                logger.error(f"❌ Не удалось открыть таблицу: {e}")
-                
-                # ПРОВЕРКА: Открываем таблицу по URL как альтернатива
-                try:
-                    logger.info("🔄 Пробую альтернативный метод открытия таблицы...")
-                    spreadsheet = client.open_by_url(f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
-                    logger.info("✅ Таблица открыта по URL")
-                except Exception as e2:
-                    logger.error(f"❌ Не удалось открыть таблицу ни одним методом: {e2}")
-                    logger.error("⚠️  ПРОВЕРЬТЕ:")
-                    logger.error(f"1. Spreadsheet ID: {SPREADSHEET_ID}")
-                    logger.error(f"2. Доступ для: {creds_data['client_email']}")
-                    logger.error("3. Что таблица существует и доступна")
+                else:
+                    logger.error("❌ GOOGLE_CREDENTIALS также не установлена в переменных окружения")
                     return False
             
-            # Получаем лист
+            # Загружаем credentials
             try:
-                worksheet = spreadsheet.worksheet(SHEET_NAME)
-                logger.info(f"✅ Лист '{SHEET_NAME}' найден")
+                creds = service_account.Credentials.from_service_account_file(
+                    'credentials.json',
+                    scopes=SCOPES
+                )
             except Exception as e:
-                logger.warning(f"⚠️  Лист '{SHEET_NAME}' не найден, использую первый лист: {e}")
-                worksheet = spreadsheet.get_worksheet(0)
-            
-            if not worksheet:
-                logger.error("❌ Не удалось получить лист таблицы")
+                logger.error(f"❌ Ошибка загрузки credentials из файла: {e}")
                 return False
             
-            self.sheet = worksheet
-            self.google_connected = True
-            
-            # Проверяем доступ на запись
+            # Создаем сервис
             try:
-                # Пробуем прочитать заголовки
-                headers = worksheet.row_values(1)
-                if headers:
-                    logger.info(f"✅ Заголовки найдены: {headers[:5]}...")
-                else:
-                    # Создаем заголовки
-                    headers = [
-                        "ФИО абитуриента", "Собеседующий", "Канонические препятствия",
-                        "Духовник", "Впечатления", "Проблемы в учебе",
-                        "Комментарии", "Вердикт", "Дата"
-                    ]
-                    worksheet.append_row(headers)
-                    logger.info("✅ Созданы новые заголовки")
+                self.sheet_service = build('sheets', 'v4', credentials=creds)
+                logger.info("✅ Сервис Google Sheets создан")
+            except Exception as e:
+                logger.error(f"❌ Ошибка создания сервиса Google Sheets: {e}")
+                return False
+            
+            # Проверяем подключение к таблице
+            try:
+                logger.info("🔍 Проверяю подключение к таблице...")
                 
-                logger.info("="*50)
-                logger.info("✅ GOOGLE SHEETS ПОДКЛЮЧЕН УСПЕШНО!")
-                logger.info("="*50)
+                # Сначала пробуем получить информацию о таблице
+                spreadsheet_info = self.sheet_service.spreadsheets().get(
+                    spreadsheetId=SPREADSHEET_ID
+                ).execute()
+                
+                logger.info(f"✅ Таблица найдена: {spreadsheet_info.get('properties', {}).get('title', 'Без названия')}")
+                
+                # Проверяем, есть ли заголовки
+                result = self.sheet_service.spreadsheets().values().get(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range='A1:I1'
+                ).execute()
+                
+                headers = result.get('values', [])
+                if headers:
+                    logger.info(f"✅ Заголовки таблицы: {headers[0]}")
+                else:
+                    # Создаем заголовки если их нет
+                    logger.info("📝 Создаю заголовки таблицы...")
+                    if self._create_headers():
+                        logger.info("✅ Заголовки успешно созданы")
+                
+                self.google_connected = True
+                logger.info("✅ Google Sheets API подключен успешно!")
                 return True
                 
-            except Exception as e:
-                logger.error(f"❌ Ошибка проверки доступа: {e}")
+            except HttpError as error:
+                logger.error(f"❌ Ошибка доступа к таблице: {error}")
+                if error.resp.status == 403:
+                    logger.error("⚠️  Нет доступа к таблице!")
+                    logger.error("Service Account Email: telegram-bot-service@telegram-bot-sheets-485811.iam.gserviceaccount.com")
+                    logger.error("1. Откройте таблицу в браузере")
+                    logger.error("2. Нажмите 'Поделиться' (Share)")
+                    logger.error("3. Добавьте email выше с правами 'Редактор' (Editor)")
+                elif error.resp.status == 404:
+                    logger.error(f"❌ Таблица не найдена! SPREADSHEET_ID: {SPREADSHEET_ID}")
+                    logger.error("Проверьте правильность ID таблицы")
+                else:
+                    logger.error(f"❌ Неизвестная ошибка HTTP: {error.resp.status}")
                 return False
                 
         except Exception as e:
-            logger.error(f"❌ Критическая ошибка при подключении: {e}", exc_info=True)
-            self.google_connected = False
+            logger.error(f"❌ Общая ошибка подключения к Google Sheets: {e}", exc_info=True)
+            return False
+    
+    def _create_headers(self):
+        """Создание заголовков таблицы"""
+        try:
+            headers = [
+                ["ФИО абитуриента", "Собеседующий", "Канонические препятствия",
+                 "Духовник", "Впечатления", "Проблемы в учебе",
+                 "Комментарии", "Вердикт", "Дата"]
+            ]
+            
+            body = {
+                'values': headers
+            }
+            
+            self.sheet_service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range='A1:I1',
+                valueInputOption='RAW',
+                body=body
+            ).execute()
+            
+            logger.info("✅ Заголовки созданы")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания заголовков: {e}")
             return False
     
     async def save_to_sheet(self, data):
         """Сохранение данных в Google Sheets"""
-        if not self.google_connected:
+        if not self.google_connected or not self.sheet_service:
             logger.warning("⚠️  Данные НЕ сохранены (Google Sheets отключен)")
-            # Сохраняем локально как временное решение
             await self.save_to_local_file(data)
             return False
         
@@ -276,12 +168,12 @@ class InterviewBot:
             for i in range(1, 7):
                 key = f'impressions_{i}'
                 value = data.get(key)
-                if value and value != 'None' and value != '':
+                if value and value != 'None' and value != '' and value != 'Затрудняюсь ответить':
                     impressions_parts.append(value)
             
             impressions_str = "; ".join(impressions_parts) if impressions_parts else ""
             
-            # Формируем строку для записи (9 столбцов A-I)
+            # Формируем строку для записи
             row_data = [
                 data.get('fio', ''),                    # A: ФИО абитуриента
                 data.get('interviewer', ''),            # B: Собеседующий
@@ -294,37 +186,82 @@ class InterviewBot:
                 datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # I: Дата
             ]
             
-            # Очищаем данные от None
+            # Очищаем данные
             row_data = ['' if cell is None else str(cell) for cell in row_data]
             
-            logger.info(f"📝 Данные для сохранения: {row_data}")
+            logger.info(f"📝 Данные для сохранения:")
+            for i, cell in enumerate(row_data):
+                logger.info(f"  {chr(65+i)}: {cell}")
             
-            # Пробуем сохранить с повторными попытками
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    self.sheet.append_row(row_data)
-                    logger.info(f"✅ Данные успешно сохранены!")
-                    
-                    # Выводим подтверждение
-                    logger.info("="*50)
-                    logger.info("✅ ДАННЫЕ УСПЕШНО СОХРАНЕНЫ В GOOGLE SHEETS!")
-                    logger.info("="*50)
-                    
-                    return True
-                    
-                except Exception as e:
-                    logger.error(f"❌ Попытка {attempt + 1}/{max_retries} не удалась: {e}")
-                    if attempt < max_retries - 1:
-                        time.sleep(2)  # Ждем 2 секунды перед повторной попыткой
-                    else:
-                        logger.error("❌ Все попытки сохранения не удались")
-                        # Сохраняем локально как fallback
-                        await self.save_to_local_file(data)
-                        return False
-            
+            # Определяем следующую строку
+            try:
+                result = self.sheet_service.spreadsheets().values().get(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range='A:A',
+                    majorDimension='COLUMNS'
+                ).execute()
+                
+                values = result.get('values', [])
+                
+                if values and len(values) > 0:
+                    # Считаем все непустые ячейки в колонке A
+                    column_a = values[0]
+                    # Фильтруем пустые строки
+                    non_empty_cells = [cell for cell in column_a if cell and str(cell).strip()]
+                    next_row = len(non_empty_cells) + 1
+                    logger.info(f"📊 Найдено {len(non_empty_cells)} непустых ячеек в колонке A")
+                else:
+                    next_row = 2  # Начинаем со второй строки (после заголовков)
+                    logger.info("📊 Таблица пуста, начинаем со строки 2")
+                
+                logger.info(f"📝 Буду записывать в строку {next_row}")
+                
+                # Подготовка данных для записи
+                body = {
+                    'values': [row_data]
+                }
+                
+                # Записываем данные
+                update_response = self.sheet_service.spreadsheets().values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=f'A{next_row}',
+                    valueInputOption='USER_ENTERED',
+                    body=body
+                ).execute()
+                
+                logger.info(f"✅ Данные успешно сохранены в строку {next_row}!")
+                logger.info(f"📊 Обновлено ячеек: {update_response.get('updatedCells', 0)}")
+                logger.info(f"📊 Обновлено строк: {update_response.get('updatedRows', 0)}")
+                logger.info(f"📊 Обновлено колонок: {update_response.get('updatedColumns', 0)}")
+                
+                return True
+                
+            except HttpError as error:
+                logger.error(f"❌ Ошибка при определении строки: {error}")
+                # Пробуем записать в строку 2
+                logger.info("🔄 Пробую записать в строку 2...")
+                body = {
+                    'values': [row_data]
+                }
+                
+                update_response = self.sheet_service.spreadsheets().values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range='A2',
+                    valueInputOption='USER_ENTERED',
+                    body=body
+                ).execute()
+                
+                logger.info(f"✅ Данные успешно сохранены в строку 2!")
+                return True
+                
+        except HttpError as error:
+            logger.error(f"❌ Ошибка Google Sheets API: {error}")
+            if error.resp.status == 403:
+                logger.error("⚠️  Нет прав на запись в таблицу!")
+            await self.save_to_local_file(data)
+            return False
         except Exception as e:
-            logger.error(f"❌ Ошибка при подготовке данных: {e}", exc_info=True)
+            logger.error(f"❌ Неожиданная ошибка при сохранении: {e}", exc_info=True)
             await self.save_to_local_file(data)
             return False
     
@@ -354,11 +291,19 @@ class InterviewBot:
             logger.info(f"✅ Данные сохранены в локальный файл {filename}")
             logger.warning("⚠️  Эти данные нужно будет вручную перенести в Google Sheets")
             
+            # Также сохраняем в простом текстовом формате для удобства
+            txt_filename = "backup_data.txt"
+            with open(txt_filename, 'a', encoding='utf-8') as f:
+                f.write(f"\n{'='*50}\n")
+                f.write(f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                for key, value in data.items():
+                    f.write(f"{key}: {value}\n")
+            
+            return True
+            
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения в локальный файл: {e}")
-    
-    # ОСТАЛЬНЫЕ МЕТОДЫ (get_fio, get_interviewer и т.д.) остаются без изменений
-    # Я вставлю их полностью, но если нужно, могу сократить для экономии места
+            return False
     
     def get_main_keyboard(self):
         """Создает основную клавиатуру с кнопкой перезапуска"""
@@ -367,10 +312,8 @@ class InterviewBot:
     
     async def start_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Обработчик команды /start"""
-        # Очищаем данные предыдущего опроса
         context.user_data.clear()
         
-        # Показываем статус подключения
         status_msg = "✅ Google Sheets подключен" if self.google_connected else "⚠️  Google Sheets отключен - данные сохраняются локально"
         
         await update.message.reply_text(
@@ -384,7 +327,6 @@ class InterviewBot:
     
     async def restart_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Обработчик кнопки '🔄 Перезапустить бот'"""
-        # Очищаем данные предыдущего опроса
         context.user_data.clear()
         
         status_msg = "✅ Google Sheets подключен" if self.google_connected else "⚠️  Google Sheets отключен - данные сохраняются локально"
@@ -450,8 +392,6 @@ class InterviewBot:
         answer = update.message.text
         context.user_data['canonical_obstacles'] = answer
         
-        # Проверяем: если ответ "Есть канонические препятствия, НЕ можем принять в ПСТБИ"
-        # то пропускаем шаги 4-12 и переходим сразу к шагу 13
         if answer == 'Есть канонические препятствия, НЕ можем принять в ПСТБИ':
             keyboard = [
                 ['Да', 'Нет'],
@@ -466,7 +406,6 @@ class InterviewBot:
             )
             return VERDICT
         
-        # Если любой другой ответ - переходим к шагу 4
         keyboard = [
             ['Есть духовник, благословил учиться'],
             ['Есть духовник, готов благословить учиться'],
@@ -533,7 +472,7 @@ class InterviewBot:
         keyboard = [
             ['Из церковной семьи', 'Из не церковной семьи'],
             ['Затрудняюсь ответить'],
-            ['🔄 Перезапустить бот']
+            ['🔄 Перезапустить бot']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
@@ -671,7 +610,7 @@ class InterviewBot:
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
             
             await update.message.reply_text(
-                "✅ Данные успешно сохранены!\n\n"
+                "✅ Данные успешно сохранены в Google Sheets!\n\n"
                 "Спасибо!\n"
                 "Чтобы отправить еще один отзыв, нажмите 'Далее'",
                 reply_markup=reply_markup
@@ -699,7 +638,6 @@ class InterviewBot:
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
-        # Очищаем данные и начинаем новый опрос
         context.user_data.clear()
         
         status_msg = "✅ Google Sheets подключен" if self.google_connected else "⚠️  Google Sheets отключен - данные сохраняются локально"
@@ -773,32 +711,28 @@ def signal_handler(signum, frame):
 
 def main():
     """Основная функция запуска бота"""
-    # Регистрируем обработчики сигналов
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Получаем токен из переменной окружения
     BOT_TOKEN = os.environ.get('BOT_TOKEN')
     
     if not BOT_TOKEN:
         print("❌ Ошибка: BOT_TOKEN не установлен!")
         print("💡 Установите переменную окружения BOT_TOKEN")
+        print("💡 В Railway: Settings → Variables → Add New Variable")
+        print("💡 Имя: BOT_TOKEN, Значение: ваш_токен_бота")
         return
     
     print("🚀 Запускаю бота...")
     
-    # Диагностика
     print("\n🔍 ДИАГНОСТИКА:")
     print(f"Python версия: {sys.version}")
     print(f"Текущая директория: {os.getcwd()}")
     print(f"Файл credentials.json существует: {os.path.exists('credentials.json')}")
+    print(f"BOT_TOKEN установлен: {'Да' if BOT_TOKEN else 'Нет'}")
+    print(f"GOOGLE_CREDENTIALS установлена: {'Да' if os.environ.get('GOOGLE_CREDENTIALS') else 'Нет'}")
     print(f"Spreadsheet ID: {SPREADSHEET_ID}")
-    print(f"Service Account email: telegram-bot-service@telegram-bot-sheets-485811.iam.gserviceaccount.com")
-    print("="*50)
-    
-    # Убедитесь, что не запущены другие экземпляры бота
-    print("⚠️  Убедитесь, что не запущены другие экземпляры этого бота!")
-    print("Если бот запущен на Render/GitHub/AWS, остановите предыдущие инстансы.")
+    print(f"Service Account Email: telegram-bot-service@telegram-bot-sheets-485811.iam.gserviceaccount.com")
     print("="*50)
     
     bot = InterviewBot(BOT_TOKEN)
@@ -807,27 +741,25 @@ def main():
     print("\n" + "="*50)
     if bot.google_connected:
         print("✅ GOOGLE SHEETS ПОДКЛЮЧЕН УСПЕШНО!")
+        print("✅ Данные будут сохраняться напрямую в таблицу")
     else:
         print("⚠️  GOOGLE SHEETS НЕ ПОДКЛЮЧЕН")
         print("⚠️  Данные будут сохраняться в локальный файл backup_data.json")
-        print("⚠️  ПРОВЕРЬТЕ СЛЕДУЮЩЕЕ:")
-        print("1. Что сервисный аккаунт добавлен в Google Sheets как редактор")
-        print(f"   Email: telegram-bot-service@telegram-bot-sheets-485811.iam.gserviceaccount.com")
-        print("2. Правильность Spreadsheet ID")
-        print("3. Таблица существует и доступна по ссылке:")
-        print(f"   https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
-        print("4. Время на сервере синхронизировано (JWT требует точного времени)")
+        print("\n💡 РЕКОМЕНДАЦИИ:")
+        print("1. Откройте таблицу: https://docs.google.com/spreadsheets/d/1JvUD3CSFdgtsUVqir6zUfB5oC42NtP4YGOlZOVNRLho")
+        print("2. Нажмите 'Поделиться' (Share)")
+        print("3. Добавьте email: telegram-bot-service@telegram-bot-sheets-485811.iam.gserviceaccount.com")
+        print("4. Дайте права 'Редактор' (Editor)")
+        print("5. Перезапустите бота")
     print("="*50)
     print("🤖 Бот запущен!")
     print("📱 Используйте команду /start для начала опроса")
     print("🔄 Кнопка 'Перезапустить бот' доступна всегда")
     print("="*50)
     
-    # Запускаем бота с drop_pending_updates чтобы избежать конфликтов
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-        close_loop=False  # Добавляем этот параметр
+        drop_pending_updates=True
     )
 
 if __name__ == '__main__':
