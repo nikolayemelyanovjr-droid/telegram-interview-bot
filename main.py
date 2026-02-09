@@ -7,6 +7,8 @@ import json
 import os
 import sys
 import signal
+import time
+from datetime import datetime
 
 # Настройка логирования
 logging.basicConfig(
@@ -36,13 +38,15 @@ class InterviewBot:
     def setup_google_sheets(self):
         """Настройка подключения к Google Sheets"""
         try:
-            # Сначала пробуем файл credentials.json
+            logger.info("🔧 Начинаю настройку Google Sheets...")
+            
+            # Пробуем получить credentials из файла
             if os.path.exists('credentials.json'):
                 with open('credentials.json', 'r') as f:
                     creds_data = json.load(f)
                     logger.info("✅ Файл credentials.json найден")
             else:
-                # Если нет файла, пробуем переменную окружения
+                # Пробуем получить из переменной окружения
                 credentials_json = os.environ.get('GOOGLE_CREDENTIALS')
                 if not credentials_json:
                     logger.error("❌ Не найден ни файл credentials.json, ни переменная GOOGLE_CREDENTIALS")
@@ -50,28 +54,55 @@ class InterviewBot:
                 creds_data = json.loads(credentials_json)
                 logger.info("✅ Использую GOOGLE_CREDENTIALS из переменных окружения")
             
+            # Проверяем необходимые ключи
+            required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email', 'client_id']
+            missing_keys = [key for key in required_keys if key not in creds_data]
+            if missing_keys:
+                logger.error(f"❌ В credentials отсутствуют ключи: {missing_keys}")
+                return False
+            
+            # Настраиваем scope
             scope = [
                 'https://spreadsheets.google.com/feeds',
-                'https://www.googleapis.com/auth/drive'
+                'https://www.googleapis.com/auth/drive',
+                'https://www.googleapis.com/auth/spreadsheets'
             ]
             
-            # Создаем credentials из словаря
+            # Создаем credentials
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_data, scope)
             client = gspread.authorize(creds)
+            
+            # Открываем таблицу
             spreadsheet = client.open_by_key(SPREADSHEET_ID)
             
+            # Получаем лист
             try:
                 worksheet = spreadsheet.worksheet(SHEET_NAME)
+                logger.info(f"✅ Найден лист: {SHEET_NAME}")
             except:
                 worksheet = spreadsheet.get_worksheet(0)
+                logger.info(f"✅ Использую первый лист таблицы")
             
             self.sheet = worksheet
             self.google_connected = True
-            logger.info("✅ Google Sheets подключен!")
+            
+            # Проверяем заголовки столбцов
+            headers = self.sheet.row_values(1)
+            if not headers:
+                # Создаем заголовки
+                headers = [
+                    "ФИО абитуриента", "Собеседующий", "Канонические препятствия",
+                    "Духовник", "Впечатления", "Проблемы в учебе",
+                    "Комментарии", "Вердикт", "Дата"
+                ]
+                self.sheet.append_row(headers)
+                logger.info("✅ Созданы заголовки столбцов")
+            
+            logger.info("✅ Google Sheets подключен успешно!")
             return True
-
+            
         except Exception as e:
-            logger.error(f"❌ Ошибка Google Sheets: {e}")
+            logger.error(f"❌ Ошибка Google Sheets: {e}", exc_info=True)
             self.google_connected = False
             return False
     
@@ -82,50 +113,55 @@ class InterviewBot:
             return False
         
         try:
-            # Собираем все впечатления в одну строку
-            impressions = []
-            for i in range(1, 7):
-                key = f'impressions_{i}'
-                if data.get(key):
-                    impressions.append(data[key])
-            
-            impressions_str = ", ".join(impressions) if impressions else ""
-            
-            row = [
-                data.get('fio', ''),
-                data.get('interviewer', ''),
-                data.get('canonical_obstacles', ''),
-                data.get('spiritual_guide', ''),
-                impressions_str,
-                data.get('problems', ''),
-                data.get('comments', ''),
-                data.get('verdict', ''),
+            # Собираем все впечатления (шаги 5-10) в одну строку для столбца E
+            impressions_steps = [
+                data.get('impressions_1', ''),  # Шаг 5
+                data.get('impressions_2', ''),  # Шаг 6
+                data.get('impressions_3', ''),  # Шаг 7
+                data.get('impressions_4', ''),  # Шаг 8
+                data.get('impressions_5', ''),  # Шаг 9
+                data.get('impressions_6', '')   # Шаг 10
             ]
             
+            # Фильтруем пустые значения и объединяем
+            impressions_list = [imp for imp in impressions_steps if imp]
+            impressions_str = "; ".join(impressions_list) if impressions_list else ""
+            
+            # Формируем строку для записи (столбцы A-I)
+            row = [
+                data.get('fio', ''),                    # A: ФИО абитуриента
+                data.get('interviewer', ''),            # B: Собеседующий
+                data.get('canonical_obstacles', ''),    # C: Канонические препятствия
+                data.get('spiritual_guide', ''),        # D: Духовник
+                impressions_str,                        # E: Впечатления (шаги 5-10)
+                data.get('problems', ''),               # F: Проблемы в учебе
+                data.get('comments', ''),               # G: Комментарии
+                data.get('verdict', ''),                # H: Вердикт
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # I: Дата
+            ]
+            
+            # Заменяем None на пустые строки
+            row = ['' if cell is None else str(cell) for cell in row]
+            
+            logger.info(f"📝 Записываю строку: {row}")
+            
+            # Записываем в таблицу
             self.sheet.append_row(row)
-            logger.info("✅ Данные сохранены в Google Sheets")
+            
+            logger.info("✅ Данные успешно сохранены в Google Sheets")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Ошибка сохранения: {e}")
+            logger.error(f"❌ Ошибка сохранения: {e}", exc_info=True)
             return False
     
-    def get_main_keyboard(self, include_next=False):
+    def get_main_keyboard(self):
         """Создает основную клавиатуру с кнопкой перезапуска"""
-        keyboard = []
-        
-        # Добавляем кнопку перезапуска в начало
-        restart_button = [['🔄 Перезапустить бот']]
-        keyboard.extend(restart_button)
-        
-        # Если нужно добавить кнопку "Далее" (в конце опроса)
-        if include_next:
-            keyboard.append(['Далее'])
-        
+        keyboard = [['🔄 Перезапустить бот']]
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
     async def start_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Обработчик команды /start - работает ВСЕГДА"""
+        """Обработчик команды /start"""
         # Очищаем данные предыдущего опроса
         context.user_data.clear()
         
@@ -144,14 +180,15 @@ class InterviewBot:
         
         await update.message.reply_text(
             "🔄 Бот перезапущен!\n\n"
-            "Начинаем новый опрос.\n\n"
+            "Здравствуйте!\n"
+            "Поделитесь своим впечатлением от собеседования.\n\n"
             "Шаг 1: Введите ФИО абитуриента:",
             reply_markup=self.get_main_keyboard()
         )
         return FIO
     
     async def get_fio(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение ФИО"""
+        """Шаг 1: Получение ФИО абитуриента"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
@@ -171,7 +208,7 @@ class InterviewBot:
         return INTERVIEWER
     
     async def get_interviewer(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение информации о собеседующем"""
+        """Шаг 2: Получение информации о собеседующем"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
@@ -194,263 +231,266 @@ class InterviewBot:
         return CANONICAL_OBSTACLES
     
     async def get_canonical_obstacles(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение информации о канонических препятствиях"""
+        """Шаг 3: Получение информации о канонических препятствиях"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
-        context.user_data['canonical_obstacles'] = update.message.text
+        answer = update.message.text
+        context.user_data['canonical_obstacles'] = answer
         
+        # Проверяем: если ответ "Есть канонические препятствия, НЕ можем принять в ПСТБИ"
+        # то пропускаем шаги 4-12 и переходим сразу к шагу 13
+        if answer == 'Есть канонические препятствия, НЕ можем принять в ПСТБИ':
+            keyboard = [
+                ['Да', 'Нет'],
+                ['Надо посоветоваться', 'Пока пускай поступает на БФ, через год посмотрим'],
+                ['🔄 Перезапустить бот']
+            ]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+            
+            await update.message.reply_text(
+                "Шаг 13: Ваш вердикт: допускаем ли мы абитуриента к вступительному экзамену?",
+                reply_markup=reply_markup
+            )
+            return VERDICT
+        
+        # Если любой другой ответ - переходим к шагу 4
         keyboard = [
-            ['Да, есть'],
-            ['Нет, нет'],
-            ['Не спрашивал'],
+            ['Есть духовник, благословил учиться'],
+            ['Есть духовник, готов благословить учиться'],
+            ['Есть духовник, пока не готов благословить учиться'],
+            ['Духовника как такового нет, есть священник, который готов благословить учиться'],
+            ['Нет духовника'],
             ['🔄 Перезапустить бот']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Шаг 4: Наличие духовника.",
+            "Шаг 4: Наличие духовника и благословения на поступление",
             reply_markup=reply_markup
         )
         return SPIRITUAL_GUIDE
     
     async def get_spiritual_guide(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение информации о духовнике"""
+        """Шаг 4: Получение информации о духовнике"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
         context.user_data['spiritual_guide'] = update.message.text
         
         keyboard = [
+            ['Общительный, открытый', 'Замкнутый'],
+            ['Слишком общительный', 'Затрудняюсь ответить'],
             ['🔄 Перезапустить бот']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Шаг 5: Ваши впечатления от абитуриента.\n\n"
-            "Впечатление 1: Что было на собеседовании? (Что понравилось, что не понравилось?)",
+            "Шаг 5: Ваши впечатления от общения с абитуриентом",
             reply_markup=reply_markup
         )
         return IMPRESSIONS_1
     
     async def get_impressions_1(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение первого впечатления"""
+        """Шаг 5: Впечатления от общения"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
         context.user_data['impressions_1'] = update.message.text
         
         keyboard = [
+            ['Давно в церкви', 'Недавно в церкви'],
+            ['Затрудняюсь ответить'],
             ['🔄 Перезапустить бот']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Впечатление 2: Что вынесли с собеседования?",
+            "Шаг 6: Продолжаем",
             reply_markup=reply_markup
         )
         return IMPRESSIONS_2
     
     async def get_impressions_2(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение второго впечатления"""
-        if update.message.text == '🔄 Перезапустить бот':
+        """Шаг 6: Как давно в церкви"""
+        if update.message.text == '🔄 Перезапустить бot':
             return await self.restart_handler(update, context)
         
         context.user_data['impressions_2'] = update.message.text
         
         keyboard = [
+            ['Из церковной семьи', 'Из не церковной семьи'],
+            ['Затрудняюсь ответить'],
             ['🔄 Перезапустить бот']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Впечатление 3: Священник? Семинарист?",
+            "Шаг 7: Продолжаем",
             reply_markup=reply_markup
         )
         return IMPRESSIONS_3
     
     async def get_impressions_3(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение третьего впечатления"""
+        """Шаг 7: Из какой семьи"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
         context.user_data['impressions_3'] = update.message.text
         
         keyboard = [
+            ['Помогает в храме', 'Ничем не занят в храме'],
+            ['Затрудняюсь ответить'],
             ['🔄 Перезапустить бот']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Впечатление 4: Отношение к церкви?",
+            "Шаг 8: Продолжаем",
             reply_markup=reply_markup
         )
         return IMPRESSIONS_4
     
     async def get_impressions_4(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение четвертого впечатления"""
+        """Шаг 8: Помощь в храме"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
         context.user_data['impressions_4'] = update.message.text
         
         keyboard = [
+            ['Жена из церковной семьи', 'Жена из не церковной семьи'],
+            ['Не женат', 'Затрудняюсь ответить'],
             ['🔄 Перезапустить бот']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Впечатление 5: Отношение к будущему служению?",
+            "Шаг 9: Еще немного",
             reply_markup=reply_markup
         )
         return IMPRESSIONS_5
     
     async def get_impressions_5(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение пятого впечатления"""
+        """Шаг 9: Семейное положение"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
         context.user_data['impressions_5'] = update.message.text
         
         keyboard = [
+            ['Состоявшийся мужчина', 'Вполне зрелый'],
+            ['Совсем еще не зрелый', 'Затрудняюсь ответить'],
             ['🔄 Перезапустить бот']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Впечатление 6: Ваши личные впечатления.",
+            "Шаг 10: Почти закончили",
             reply_markup=reply_markup
         )
         return IMPRESSIONS_6
     
     async def get_impressions_6(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение шестого впечатления"""
+        """Шаг 10: Зрелость"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
         context.user_data['impressions_6'] = update.message.text
         
-        keyboard = [
-            ['🔄 Перезапустить бот']
-        ]
+        keyboard = [['🔄 Перезапустить бот']]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Шаг 6: Были ли какие-то проблемы/сложности на собеседовании?",
+            "Шаг 11: Какие проблемы, как вам кажется, могут возникнуть в процессе учебы?\n"
+            "(если никаких, напишите 'нет')",
             reply_markup=reply_markup
         )
         return PROBLEMS
     
     async def get_problems(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение информации о проблемах"""
+        """Шаг 11: Проблемы в учебе"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
         context.user_data['problems'] = update.message.text
         
-        keyboard = [
-            ['🔄 Перезапустить бот']
-        ]
+        keyboard = [['🔄 Перезапустить бот']]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Шаг 7: Ваши комментарии и пожелания.",
+            "Шаг 12: Ваши общие впечатления и комментарии",
             reply_markup=reply_markup
         )
         return COMMENTS
     
     async def get_comments(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение комментариев"""
+        """Шаг 12: Комментарии"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
         context.user_data['comments'] = update.message.text
         
         keyboard = [
-            ['Кандидат подходит', 'Кандидат не подходит'],
-            ['Нужно дополнительное собеседование', 'Нужно посоветоваться'],
+            ['Да', 'Нет'],
+            ['Надо посоветоваться', 'Пока пускай поступает на БФ, через год посмотрим'],
             ['🔄 Перезапустить бот']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(
-            "Шаг 8: Ваш вердикт по кандидату.",
+            "Шаг 13: Ваш вердикт: допускаем ли мы абитуриента к вступительному экзамену?",
             reply_markup=reply_markup
         )
         return VERDICT
     
     async def get_verdict(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Получение вердикта"""
+        """Шаг 13: Вердикт"""
         if update.message.text == '🔄 Перезапустить бот':
             return await self.restart_handler(update, context)
         
         context.user_data['verdict'] = update.message.text
         
-        # Показываем все введенные данные для подтверждения
-        summary = self._format_summary(context.user_data)
-        
-        keyboard = [
-            ['Далее'],
-            ['🔄 Перезапустить бот']
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-        
-        await update.message.reply_text(
-            f"Проверьте введенные данные:\n\n{summary}\n\n"
-            "Нажмите 'Далее' для сохранения или '🔄 Перезапустить бот' для начала заново.",
-            reply_markup=reply_markup
-        )
-        return CONFIRM
-    
-    def _format_summary(self, data):
-        """Форматирование данных для отображения"""
-        summary = f"""
-📋 **Сводка данных:**
-━━━━━━━━━━━━━━━━━━━━
-👤 **ФИО абитуриента:** {data.get('fio', 'Не указано')}
-👨‍🏫 **Собеседующий:** {data.get('interviewer', 'Не указано')}
-⚖️ **Канонические препятствия:** {data.get('canonical_obstacles', 'Не указано')}
-🙏 **Наличие духовника:** {data.get('spiritual_guide', 'Не указано')}
-
-📝 **Впечатления:**
-1. {data.get('impressions_1', 'Не указано')}
-2. {data.get('impressions_2', 'Не указано')}
-3. {data.get('impressions_3', 'Не указано')}
-4. {data.get('impressions_4', 'Не указано')}
-5. {data.get('impressions_5', 'Не указано')}
-6. {data.get('impressions_6', 'Не указано')}
-
-⚠️ **Проблемы/сложности:** {data.get('problems', 'Не указано')}
-💬 **Комментарии:** {data.get('comments', 'Не указано')}
-✅ **Вердикт:** {data.get('verdict', 'Не указано')}
-━━━━━━━━━━━━━━━━━━━━
-        """
-        return summary
-    
-    async def confirm_next(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Подтверждение и сохранение данных"""
-        if update.message.text == '🔄 Перезапустить бот':
-            return await self.restart_handler(update, context)
-        
         # Сохраняем данные в Google Sheets
         success = await self.save_to_sheet(context.user_data)
         
         if success:
+            keyboard = [['Далее'], ['🔄 Перезапустить бот']]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+            
             await update.message.reply_text(
-                "✅ Данные успешно сохранены в Google Sheets!\n\n"
-                "Опрос завершен. Для начала нового опроса нажмите /start или '🔄 Перезапустить бот'.",
-                reply_markup=self.get_main_keyboard()
+                "Спасибо!\n"
+                "Чтобы отправить еще один отзыв, нажмите 'Далее'",
+                reply_markup=reply_markup
             )
         else:
+            keyboard = [['🔄 Перезапустить бот']]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+            
             await update.message.reply_text(
                 "❌ Произошла ошибка при сохранении данных.\n\n"
-                "Попробуйте еще раз, нажав '🔄 Перезапустить бот' или /start.",
-                reply_markup=self.get_main_keyboard()
+                "Попробуйте еще раз, нажав '🔄 Перезапустить бот'",
+                reply_markup=reply_markup
             )
         
-        # Очищаем данные
+        return CONFIRM
+    
+    async def confirm_next(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Обработчик кнопки 'Далее' - начинает новый опрос"""
+        if update.message.text == '🔄 Перезапустить бот':
+            return await self.restart_handler(update, context)
+        
+        # Очищаем данные и начинаем новый опрос
         context.user_data.clear()
-        return ConversationHandler.END
+        
+        await update.message.reply_text(
+            "🔄 Начинаем новый опрос!\n\n"
+            "Здравствуйте!\n"
+            "Поделитесь своим впечатлением от собеседования.\n\n"
+            "Шаг 1: Введите ФИО абитуриента:",
+            reply_markup=self.get_main_keyboard()
+        )
+        return FIO
     
     async def cancel_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Обработчик отмены"""
@@ -525,15 +565,27 @@ def main():
     
     print("🚀 Запускаю бота...")
     
+    # Добавляем диагностику
+    print("\n🔍 Диагностика окружения:")
+    print(f"Python версия: {sys.version}")
+    print(f"Текущая директория: {os.getcwd()}")
+    print(f"Существует credentials.json: {os.path.exists('credentials.json')}")
+    
     bot = InterviewBot(BOT_TOKEN)
     application = bot.create_application()
     
     print("\n" + "="*50)
-    print("✅ БОТ ЗАПУЩЕН И РАБОТАЕТ!")
+    if bot.google_connected:
+        print("✅ БОТ ЗАПУЩЕН И РАБОТАЕТ!")
+        print("✅ Google Sheets подключен!")
+    else:
+        print("⚠️  БОТ ЗАПУЩЕН В РЕЖИМЕ БЕЗ GOOGLE SHEETS")
+        print("⚠️  Данные НЕ будут сохраняться в таблицу")
     print("="*50)
     print("📱 Имя вашего бота: (то, что вы указали в @BotFather)")
     print("💬 Команда для запуска: /start")
     print("🔄 Кнопка перезапуска доступна всегда")
+    print("🔄 Кнопка 'Далее' для нового опроса в конце")
     print("="*50)
     
     # Запускаем бота
